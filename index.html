@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Motor Learning Semantic Map</title>
+  <link rel="stylesheet" href="styles.css">
+
+  <!-- Tabulator -->
+  <link href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator.min.css" rel="stylesheet">
+</head>
+<body>
+  <!-- Graph tab pane -->
+  <div id="view-graph" class="view active">
+    <div id="sigma-container"></div>
+
+    <!-- Floating cluster name labels -->
+    <div id="cluster-labels"></div>
+
+    <!-- Hover tooltip -->
+    <div id="tooltip" hidden></div>
+  </div>
+
+  <!-- Table tab pane -->
+  <!-- <div id="view-table" class="view">
+    <div id="table-wrap" class="panel">
+      <div class="table-filter-row">
+        <select id="table-filter-field">
+          <option value=""></option>
+          <option value="title">Paper</option>
+          <option value="authors">Author</option>
+          <option value="indegree">Citations</option>
+          <option value="year">Year</option>
+          <option value="journal">Journal</option>
+          <option value="doi">DOI</option>
+        </select>
+
+        <select id="table-filter-type">
+          <option value="like">Contains</option>
+          <option value="=">=</option>
+          <option value="<"><</option>
+          <option value="<="><=</option>
+          <option value=">">></option>
+          <option value=">=">>=</option>
+          <option value="!=">!=</option>
+        </select>
+
+        <input id="table-filter-value" type="text" placeholder="value to filter">
+        <button id="table-filter-clear">Clear Filter</button>
+      </div>
+
+      <div id="papers-table"></div>
+    </div>
+  </div> -->
+
+  <!-- Controls panel -->
+  <div id="controls" class="panel collapsed">
+    <button id="controls-toggle" class="icon-btn" type="button" aria-label="Show controls">⟩</button>
+    
+    <div class="topline">
+      <div class="titleblock">
+        <h1>Motor Learning Semantic Map</h1>
+        <p class="subtitle">14,511 papers &middot; UMAP of SPECTER2 embeddings</p>
+      </div>
+
+      <div class="tabs">
+        <button id="tab-graph" class="tab active" type="button">Graph</button>
+        <!-- <button id="tab-table" class="tab" type="button">Table</button> -->
+      </div>
+    </div>
+
+    <input id="search" type="search" placeholder="Search title, author, DOI...">
+    <ul id="search-results" hidden></ul>
+
+    <div class="selected-count" id="selected-count">Nodes selected: —</div>
+
+    <button id="apply-filters" class="primary" type="button">Filter</button>
+
+    <!-- Global filters (v1-like) -->
+    <input id="filter-title" type="search" placeholder="Filter by publication...">
+    <input id="filter-author" type="search" placeholder="Filter by author(s), comma-separated...">
+    <input id="filter-abstract" type="search" placeholder="Filter by abstracts...">
+    <input id="filter-journal" type="search" placeholder="Filter by journal...">
+    <input id="filter-keywords" type="search" placeholder="Filter by keywords, comma-separated...">
+    <!-- <input id="filter-mesh" type="search" placeholder="Filter by MeSH headers, comma-separated..."> -->
+
+    <div class="control-row">
+      <label>Year <span id="year-readout"></span></label>
+      <input id="year-min" type="range">
+      <input id="year-max" type="range">
+    </div>
+
+    <div class="control-row">
+      <label>Color by</label>
+      <select id="color-by">
+        <option value="topic">Topic</option>
+        <option value="cluster">Community</option>
+        <option value="year">Year</option>
+        <option value="indegree">Citations</option>
+      </select>
+    </div>
+
+    <div class="control-row">
+      <label>Labels</label>
+      <select id="label-mode">
+        <option value="dynamic">Dynamic (zoom / hover)</option>
+        <option value="always">Always visible</option>
+      </select>
+    </div>
+
+    <div class="control-row checkbox-row">
+      <label><input id="bridge-toggle" type="checkbox"> Highlight bridge papers</label>
+    </div>
+
+    <div class="control-row checkbox-row">
+      <label><input id="edges-toggle" type="checkbox"> Show citation edges</label>
+    </div>
+
+    <details class="legend-wrap">
+      <summary>Topics (click to toggle)</summary>
+      <ul id="topic-legend"></ul>
+    </details>
+
+    <details class="legend-wrap">
+      <summary>Communities (click to toggle)</summary>
+      <ul id="legend"></ul>
+    </details>
+
+    <details class="about">
+      <summary>About this map</summary>
+      <p>Each dot is a paper, positioned by a 2D <strong>UMAP</strong> of its
+         SPECTER2 embedding, so papers with similar text sit near each other.
+         By default colors mark <strong>BERTopic topics</strong>; you can switch
+         to Leiden <strong>communities</strong>, year, or citation count. Dot
+         size is total citation degree.</p>
+      <p><strong>Hover</strong> any paper for its title, year and authors.
+         <strong>Click</strong> a paper to draw its citation links and open the
+         side panel. Toggle <strong>citation edges</strong> to see where the
+         citation graph crosses the semantic map &mdash; long edges connect
+         papers cited together but semantically distant.</p>
+    </details>
+  </div>
+
+  <!-- Right-side detail panel -->
+  <aside id="detail" class="panel" hidden>
+    <button id="detail-close" aria-label="Close" type="button">&times;</button>
+    <div id="detail-body"></div>
+  </aside>
+
+  <!-- Loading overlay -->
+  <div id="loading">Loading semantic map...</div>
+
+  <!-- Tabulator JS -->
+  <script src="https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
+
+  <!-- App -->
+  <script type="module" src="main.js?v=3"></script>
+</body>
+</html>
