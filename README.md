@@ -35,3 +35,11 @@ These are recomputed when the embedding model is switched (different topic struc
 
 - Generated with [this repo](https://github.com/maduarte95/embeddings-motor-learning-network/tree/comparison_metrics).
 
+## How to run
+
+
+1. `cd motor-semantic-viz`
+
+2. `python3 -m http.server 8777`
+
+3. Navigate to http://localhost:8777/
