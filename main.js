@@ -40,6 +40,13 @@ const state = {
   _citeLayerBuilt: false,
   shiftDown: false,
 
+  // Intra-topic citation islands: for each named topic, the connected
+  // components of the citation subgraph induced on just that topic's papers.
+  // Reveals papers that share a topic but form disconnected citation bodies.
+  showIntraTopic: false,
+  _intraLayerBuilt: false,
+  topicComponents: null, // { compRank, compSizeOf, compSizes } — see computeTopicComponents
+
   // floating-label bookkeeping for the currently-active grouping
   labelMode: "dynamic", // dynamic | always
   activeLabelEls: {},
@@ -187,6 +194,15 @@ async function switchModel(key) {
     // them. Community ids are stable across models, so those mutes are kept.
     state.mutedTopics.clear();
 
+    // Topics changed, so the intra-topic components and their edge layer are
+    // stale. Drop and (if the view is active) recompute against the new topics.
+    state.topicComponents = null;
+    dropIntraTopicLayer();
+    if (state.showIntraTopic) {
+      computeTopicComponents();
+      buildIntraTopicLayer();
+    }
+
     buildIndex();
     buildLegend("topic");
     buildLegend("cluster");
@@ -329,6 +345,17 @@ function nodeReducer(node, attrs) {
   }
 
   a.color = nodeColor(r);
+  if (state.showIntraTopic && state.topicComponents) {
+    const i = parseInt(node, 10);
+    a.color = intraTopicColor(i, r);
+    // Genuine islands (a non-main component with >1 paper) often overlap the
+    // main body in semantic space, so enlarge + raise them to make them pop.
+    const tc = state.topicComponents;
+    if (tc.compRank[i] >= 1 && tc.compSizeOf[i] >= 2) {
+      a.size = a._baseSize * 1.9;
+      a.zIndex = 3;
+    }
+  }
 
   if (state.selectedNode !== null) {
     if (node === state.selectedNode) {
@@ -356,6 +383,8 @@ function edgeReducer(edge, attrs) {
   // Static citation layer is hidden unless the global toggle is on.
   if (edge.startsWith("__cite:")) {
     if (!state.showEdges) return { ...attrs, hidden: true };
+  } else if (edge.startsWith("__intra:")) {
+    if (!state.showIntraTopic) return { ...attrs, hidden: true };
   }
   return attrs;
 }
@@ -591,6 +620,103 @@ function buildCitationLayer() {
   state._citeLayerBuilt = true;
 }
 
+// ── Intra-topic citation islands ────────────────────────────────────────────
+// For each *named* topic, find the connected components of the citation
+// subgraph induced on that topic's papers (citations treated as undirected,
+// only edges with both endpoints in the topic). >1 component means papers that
+// share a topic but never cite one another — disconnected citation communities.
+// Cheap to do at runtime (O(nodes + edges)); recomputed when the model changes.
+const ISLAND_PALETTE = ["#ff5d5d", "#ffb14e", "#fa3e7a", "#9d4edd", "#3ad1ff", "#7cff6b"];
+
+function computeTopicComponents() {
+  const nodes = state.nodesData.nodes;
+  const n = nodes.length;
+
+  // Members of each named topic (skip the -1/unnamed bucket).
+  const members = new Map();
+  for (let i = 0; i < n; i++) {
+    const t = nodes[i].topic;
+    if (!state.topicsData[String(t)]) continue;
+    if (!members.has(t)) members.set(t, []);
+    members.get(t).push(i);
+  }
+
+  const compRank = new Int16Array(n).fill(-1); // rank of node's component (0 = largest)
+  const compSizeOf = new Int32Array(n); // size of the node's own component
+  const compSizes = new Map(); // topic id -> [component sizes, desc]
+  const visited = new Uint8Array(n);
+
+  for (const [t, idxs] of members) {
+    const inTopic = new Set(idxs);
+    const comps = [];
+    for (const start of idxs) {
+      if (visited[start]) continue;
+      visited[start] = 1;
+      const stack = [start];
+      const comp = [];
+      while (stack.length) {
+        const u = stack.pop();
+        comp.push(u);
+        for (const v of csrNeighbors(state.outCSR, u)) {
+          if (inTopic.has(v) && !visited[v]) { visited[v] = 1; stack.push(v); }
+        }
+        for (const v of csrNeighbors(state.inCSR, u)) {
+          if (inTopic.has(v) && !visited[v]) { visited[v] = 1; stack.push(v); }
+        }
+      }
+      comps.push(comp);
+    }
+    comps.sort((a, b) => b.length - a.length);
+    comps.forEach((comp, rank) => {
+      for (const i of comp) { compRank[i] = rank; compSizeOf[i] = comp.length; }
+    });
+    compSizes.set(t, comps.map((c) => c.length));
+  }
+
+  state.topicComponents = { compRank, compSizeOf, compSizes };
+}
+
+// Color for the intra-topic view: the main citation body keeps the topic color,
+// genuine multi-paper islands get vivid palette colors, and isolated singletons
+// (papers with no intra-topic citation at all) are de-emphasized.
+function intraTopicColor(i, r) {
+  const tc = state.topicComponents;
+  const rank = tc.compRank[i];
+  if (rank < 0) return "#3a4150"; // not in a named topic
+  if (rank === 0) return r.topic_color; // largest component = the topic's main body
+  if (tc.compSizeOf[i] < 2) return "#5a6170"; // lone disconnected paper
+  return ISLAND_PALETTE[(rank - 1) % ISLAND_PALETTE.length];
+}
+
+function buildIntraTopicLayer() {
+  if (state._intraLayerBuilt) return;
+  const nodes = state.nodesData.nodes;
+  const n = state.outCSR.n;
+  for (let i = 0; i < n; i++) {
+    const ti = nodes[i].topic;
+    if (!state.topicsData[String(ti)]) continue;
+    for (const t of csrNeighbors(state.outCSR, i)) {
+      if (nodes[t].topic !== ti) continue; // same named topic only
+      const k = `__intra:${i}->${t}`;
+      if (!state.graph.hasEdge(k))
+        state.graph.addDirectedEdgeWithKey(k, String(i), String(t), {
+          color: "rgba(150,160,180,0.30)",
+          size: 0.4,
+        });
+    }
+  }
+  state._intraLayerBuilt = true;
+}
+
+function dropIntraTopicLayer() {
+  const toRemove = [];
+  state.graph.forEachEdge((edge) => {
+    if (edge.startsWith("__intra:")) toRemove.push(edge);
+  });
+  for (const e of toRemove) state.graph.dropEdge(e);
+  state._intraLayerBuilt = false;
+}
+
 // ── Detail panel ──────────────────────────────────────────────────────────
 function showPaperDetail(idx) {
   const r = state.nodesData.nodes[idx];
@@ -650,6 +776,52 @@ function showGroupDetail(key, gid) {
     ? `<h3>Top words</h3><p class="meta">${escapeHtml(c.top_words)}</p>`
     : "";
 
+  // For topics, report how the topic's citation subgraph fragments. We count
+  // an "island" as a component with >=2 papers; lone papers (singletons) cite
+  // nothing within the topic and are reported separately, not as fragmentation.
+  let compBlock = "";
+  if (key === "topic") {
+    if (!state.topicComponents) computeTopicComponents();
+    const sizes = state.topicComponents.compSizes.get(c.id) || [];
+    if (sizes.length) {
+      const total = sizes.reduce((a, b) => a + b, 0); // == papers in the topic
+      const islands = sizes.filter((s) => s >= 2); // sorted desc already
+      const isolated = sizes.filter((s) => s === 1).length;
+      const pct = (s) => Math.round((100 * s) / total);
+      const isoText = isolated
+        ? `, plus ${isolated} isolated paper${isolated > 1 ? "s" : ""} (${pct(isolated)}%) citing nothing within the topic`
+        : "";
+
+      const mainPct = pct(islands[0] || 0);
+      let verdict, list = "";
+      if (islands.length <= 1) {
+        verdict = `Well connected — ${islands[0] || 0} of ${total} papers (${mainPct}%) form one citation body${isoText}.`;
+      } else {
+        verdict =
+          `Fragmented — the largest citation body holds ${islands[0]} of ${total} papers (${mainPct}%); ` +
+          `${islands.length - 1} other communit${islands.length - 1 > 1 ? "ies" : "y"} of ≥2 papers ` +
+          `are disconnected from it${isoText}.`;
+        list =
+          `<ul class="top-list">` +
+          islands
+            .map((s, rank) => {
+              const col = rank === 0 ? c.color : ISLAND_PALETTE[(rank - 1) % ISLAND_PALETTE.length];
+              const name = rank === 0 ? "Main body" : `Island ${rank}`;
+              return `<li><span class="swatch" style="background:${col}"></span>${name}<div class="sub">${s} papers (${pct(s)}%)</div></li>`;
+            })
+            .join("") +
+          `</ul>`;
+      }
+      compBlock = `
+        <h3>Citation structure</h3>
+        <p class="meta">${verdict}</p>
+        ${list}
+        <div class="actions">
+          <button id="show-islands">Highlight citation islands</button>
+        </div>`;
+    }
+  }
+
   document.getElementById("detail-body").innerHTML = `
     <span class="cluster-tag" style="background:${c.color};color:#0e1116">${escapeHtml(c.name)}</span>
     <h2>${escapeHtml(c.name)}</h2>
@@ -658,6 +830,7 @@ function showGroupDetail(key, gid) {
       <button id="isolate-group">Isolate this ${label.toLowerCase()}</button>
       <button id="frame-group">Center view</button>
     </div>
+    ${compBlock}
     ${wordsBlock}
     ${keywords ? `<h3>Top keywords</h3><ul class="top-list">${keywords}</ul>` : ""}
     ${authors ? `<h3>Top authors</h3><ul class="top-list">${authors}</ul>` : ""}
@@ -666,6 +839,19 @@ function showGroupDetail(key, gid) {
   document.getElementById("detail").hidden = false;
   document.getElementById("frame-group").addEventListener("click", () => frameGroup(key, gid));
   document.getElementById("isolate-group").addEventListener("click", () => isolateGroup(key, gid));
+  document.getElementById("show-islands")?.addEventListener("click", () => highlightTopicIslands(key, gid));
+}
+
+// One-click: isolate this topic and turn on the intra-topic citation view, so
+// its disconnected citation communities (if any) stand out immediately.
+function highlightTopicIslands(key, gid) {
+  if (!state.topicComponents) computeTopicComponents();
+  buildIntraTopicLayer();
+  state.showIntraTopic = true;
+  const cb = document.getElementById("intra-toggle");
+  if (cb) cb.checked = true;
+  isolateGroup(key, gid); // refreshes legend + renderer + refilter
+  frameGroup(key, gid);
 }
 
 function hideDetail() {
@@ -731,6 +917,15 @@ function initControls() {
   document.getElementById("edges-toggle").addEventListener("change", (e) => {
     state.showEdges = e.target.checked;
     if (state.showEdges) buildCitationLayer();
+    state.renderer.refresh();
+  });
+
+  document.getElementById("intra-toggle").addEventListener("change", (e) => {
+    state.showIntraTopic = e.target.checked;
+    if (state.showIntraTopic) {
+      if (!state.topicComponents) computeTopicComponents();
+      buildIntraTopicLayer();
+    }
     state.renderer.refresh();
   });
 

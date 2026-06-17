@@ -117,6 +117,10 @@
       <label><input id="edges-toggle" type="checkbox"> Show citation edges</label>
     </div>
 
+    <div class="control-row checkbox-row">
+      <label><input id="intra-toggle" type="checkbox"> Intra-topic citation islands</label>
+    </div>
+
     <details class="legend-wrap">
       <summary>Topics (click to toggle)</summary>
       <ul id="topic-legend"></ul>
@@ -130,15 +134,27 @@
     <details class="about">
       <summary>About this map</summary>
       <p>Each dot is a paper, positioned by a 2D <strong>UMAP</strong> of its
-         SPECTER2 embedding, so papers with similar text sit near each other.
-         By default colors mark <strong>BERTopic topics</strong>; you can switch
-         to Leiden <strong>communities</strong>, year, or citation count. Dot
-         size is total citation degree.</p>
+         text embedding, so papers with similar text sit near each other. Use
+         <strong>Embedding model</strong> to switch the embedding space (e.g.
+         SPECTER2 vs Gemini) &mdash; positions and topics change, the citation
+         graph stays the same. By default colors mark <strong>BERTopic
+         topics</strong>; you can switch to Leiden <strong>communities</strong>,
+         year, or citation count. Dot size is total citation degree.</p>
       <p><strong>Hover</strong> any paper for its title, year and authors.
          <strong>Click</strong> a paper to draw its citation links and open the
          side panel. Toggle <strong>citation edges</strong> to see where the
          citation graph crosses the semantic map &mdash; long edges connect
          papers cited together but semantically distant.</p>
+      <p><strong>Intra-topic citation islands</strong> asks a sharper question:
+         within a single topic, do the papers form one connected citation body
+         or several disconnected ones? It draws only citations <em>inside</em>
+         each topic and finds the connected components of that subgraph. The
+         largest body keeps the topic color; separate communities (&ge;2 papers)
+         get vivid colors and are enlarged (they often overlap the main body in
+         semantic space); lone papers that cite nothing within the topic are
+         greyed. Click a topic to read its breakdown &mdash; what fraction of
+         the topic sits in the main body vs. disconnected islands vs. isolated
+         papers.</p>
     </details>
   </div>
 
@@ -155,6 +171,6 @@
   <script src="https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
 
   <!-- App -->
-  <script type="module" src="main.js?v=4"></script>
+  <script type="module" src="main.js?v=7"></script>
 </body>
 </html>
