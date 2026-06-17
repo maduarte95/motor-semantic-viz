@@ -11,6 +11,10 @@ import { Sigma } from "https://cdn.jsdelivr.net/npm/sigma@2.4.0/+esm";
 
 // ── State ─────────────────────────────────────────────────────────────────
 const state = {
+  models: [], // [{ key, label }, ...] from data/models.json
+  embeddingKey: null, // currently active embedding model key
+  switchingModel: false,
+
   nodesData: null, // { year_min, year_max, nodes: [...] }
   topicsData: null, // { "0": {...}, ... }   BERTopic
   communitiesData: null, // { "0": {...}, ... }   Leiden
@@ -32,7 +36,6 @@ const state = {
   mutedClusters: new Set(), // muted Leiden communities
   mutedTopics: new Set(), // muted BERTopic topics
   colorBy: "topic", // topic | cluster | year | indegree
-  highlightBridges: false,
   showEdges: false,
   _citeLayerBuilt: false,
   shiftDown: false,
@@ -71,10 +74,21 @@ main().catch((err) => {
 });
 
 async function main() {
+  // Available embedding models (data-driven). Fall back to specter2 alone if
+  // the manifest is missing, so the viewer still works.
+  state.models = await fetch("data/models.json")
+    .then((r) => (r.ok ? r.json() : Promise.reject()))
+    .catch(() => [{ key: "specter2", label: "SPECTER2" }]);
+  state.embeddingKey = state.models[0].key;
+  const key = state.embeddingKey;
+
+  // Citation edges (edges_*.bin) and abstracts.json are model-independent —
+  // node ordering is identical across models, so the CSR indices stay valid
+  // and these are loaded once and never reloaded on a model switch.
   const [nodesPayload, topicsPayload, communitiesPayload, outBuf, inBuf] = await Promise.all([
-    fetch("data/nodes.json").then((r) => r.json()),
-    fetch("data/topics.json").then((r) => r.json()),
-    fetch("data/communities.json").then((r) => r.json()),
+    fetch(`data/${key}/nodes.json`).then((r) => r.json()),
+    fetch(`data/${key}/topics.json`).then((r) => r.json()),
+    fetch(`data/${key}/communities.json`).then((r) => r.json()),
     fetch("data/edges_out.bin").then((r) => r.arrayBuffer()),
     fetch("data/edges_in.bin").then((r) => r.arrayBuffer()),
   ]);
@@ -87,6 +101,8 @@ async function main() {
   state.yearMin = nodesPayload.year_min;
   state.yearMax = nodesPayload.year_max;
 
+  initModelSelect();
+  updateSubtitle();
   buildIndex();
   buildGraph();
   initSigma();
@@ -103,6 +119,90 @@ async function main() {
   initYearControls();
 
   document.getElementById("loading")?.classList.add("hidden");
+}
+
+// ── Embedding-model switching ───────────────────────────────────────────────
+// Everything that depends on the embeddings — UMAP coordinates, topics, and the
+// community centroids — is reloaded per model. Citation edges, abstracts, and
+// the graphml-derived fields (title/authors/year/...) are identical across
+// models, so the graph, sigma renderer, search index, and current selection are
+// reused; only node positions/colors and the grouping payloads are swapped.
+function initModelSelect() {
+  const sel = document.getElementById("model-select");
+  if (!sel) return;
+  sel.innerHTML = state.models
+    .map((m) => `<option value="${m.key}">${escapeHtml(m.label)}</option>`)
+    .join("");
+  sel.value = state.embeddingKey;
+  sel.addEventListener("change", (e) => switchModel(e.target.value));
+}
+
+function modelLabel(key) {
+  const m = state.models.find((m) => m.key === key);
+  return m ? m.label : key;
+}
+
+function updateSubtitle() {
+  const el = document.getElementById("subtitle");
+  if (!el) return;
+  const n = state.nodesData.nodes.length.toLocaleString();
+  el.innerHTML = `${n} papers &middot; UMAP of ${escapeHtml(modelLabel(state.embeddingKey))} embeddings`;
+}
+
+async function switchModel(key) {
+  if (key === state.embeddingKey || state.switchingModel) return;
+  const sel = document.getElementById("model-select");
+  state.switchingModel = true;
+  if (sel) sel.disabled = true;
+
+  try {
+    const [nodesPayload, topicsPayload, communitiesPayload] = await Promise.all([
+      fetch(`data/${key}/nodes.json`).then((r) => r.json()),
+      fetch(`data/${key}/topics.json`).then((r) => r.json()),
+      fetch(`data/${key}/communities.json`).then((r) => r.json()),
+    ]);
+
+    state.embeddingKey = key;
+    state.nodesData = nodesPayload;
+    state.topicsData = topicsPayload;
+    state.communitiesData = communitiesPayload;
+
+    // Node index i is the same paper across models, so update graph attributes
+    // in place rather than rebuilding the graph (keeps camera + selection).
+    const nodes = nodesPayload.nodes;
+    for (let i = 0; i < nodes.length; i++) {
+      const r = nodes[i];
+      const size = nodeRenderSize(r);
+      state.graph.mergeNodeAttributes(String(i), {
+        x: r.x,
+        y: r.y,
+        size,
+        color: nodeColor(r),
+        _data: r,
+        _baseSize: size,
+      });
+    }
+
+    // Topic ids are model-specific, so any muted topics are now stale — reset
+    // them. Community ids are stable across models, so those mutes are kept.
+    state.mutedTopics.clear();
+
+    buildIndex();
+    buildLegend("topic");
+    buildLegend("cluster");
+    renderGroupLabels();
+    updateSubtitle();
+
+    if (state.filteredSet) applyGlobalFilters();
+    else updateSelectedCount();
+    state.renderer.refresh();
+  } catch (err) {
+    console.error("Model switch failed:", err);
+    if (sel) sel.value = state.embeddingKey; // revert dropdown to active model
+  } finally {
+    state.switchingModel = false;
+    if (sel) sel.disabled = false;
+  }
 }
 
 // ── CSR helpers ───────────────────────────────────────────────────────────
@@ -229,12 +329,6 @@ function nodeReducer(node, attrs) {
   }
 
   a.color = nodeColor(r);
-
-  if (state.highlightBridges && r.bridge) {
-    a.color = "#ffd76e";
-    a.size = a._baseSize * 1.6;
-    a.zIndex = 3;
-  }
 
   if (state.selectedNode !== null) {
     if (node === state.selectedNode) {
@@ -512,15 +606,11 @@ function showPaperDetail(idx) {
   const communityTag = community
     ? `<span class="cluster-tag" style="background:${community.color};color:#0e1116">${escapeHtml(community.name)}</span>`
     : "";
-  const bridgeBadge = r.bridge
-    ? `<span class="cluster-tag" style="background:#ffd76e;color:#0e1116">Bridge paper</span>`
-    : "";
-
   const numOut = state.outCSR.offsets[idx + 1] - state.outCSR.offsets[idx];
   const numIn = state.inCSR.offsets[idx + 1] - state.inCSR.offsets[idx];
 
   document.getElementById("detail-body").innerHTML = `
-    ${topicTag} ${communityTag} ${bridgeBadge}
+    ${topicTag} ${communityTag}
     <h2>${escapeHtml(r.title)}</h2>
     <div class="meta">${escapeHtml(auths)}</div>
     <div class="meta">${r.year ?? ""}${r.journal ? " &middot; " + escapeHtml(r.journal) : ""}</div>
@@ -638,11 +728,6 @@ function initControls() {
     state.renderer.refresh();
   });
 
-  document.getElementById("bridge-toggle").addEventListener("change", (e) => {
-    state.highlightBridges = e.target.checked;
-    state.renderer.refresh();
-  });
-
   document.getElementById("edges-toggle").addEventListener("change", (e) => {
     state.showEdges = e.target.checked;
     if (state.showEdges) buildCitationLayer();
@@ -743,6 +828,9 @@ function buildLegend(key) {
   const g = grouping(key);
   const ul = document.getElementById(g.legendId);
   ul.innerHTML = "";
+  // Drop any button row from a previous build so switching models doesn't stack
+  // duplicate Select All / Deselect All rows.
+  ul.parentNode.querySelector(".legend-btn-row")?.remove();
 
   const btnRow = document.createElement("div");
   btnRow.className = "legend-btn-row";
