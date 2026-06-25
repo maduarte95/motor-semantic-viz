@@ -35,6 +35,8 @@ These are recomputed when the embedding model is switched (different topic struc
 
 - Generated with [this repo](https://github.com/maduarte95/embeddings-motor-learning-network/tree/comparison_metrics).
 
+- Bundles with data corresponding to topic modeling with a minimum cluster size of 30 papers
+
 ## How to run
 
 
